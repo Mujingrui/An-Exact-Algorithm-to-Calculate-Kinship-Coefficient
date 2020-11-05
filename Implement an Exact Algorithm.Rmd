@@ -1,0 +1,220 @@
+---
+title: "week 3"
+author: "Jingrui MU(300130858)"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+options(tinytex.verbose = TRUE)
+```
+
+# 1 Introduction
+In this question, I implemented the exact algorithm in R from paper [* Efficient computation of the kinship coefficients*][https://www.researchgate.net/publication/327346654_Efficient_Computation_of_the_Kinship_Coefficients]. In this paper, these authors proposed two different kinds of algorithms, exact algorithm and approximate algorithm, which are implemented as PedKin in C++. In section2, I will introduce the exact algorithm in details and how I implement it in R. In section3, I will check my algorithm through comparing it with *kinship* function in [*kinship2*][https://cran.r-project.org/web/packages/kinship2/kinship2.pdf], which is a R package to handle family data with a pedigree object and to create correlation structures that describe family relationships such as kinship. In section4, I will implement my program in two larger sample sizes, which are from data AILped and simulated by using *sim_ail_pedigree* function in [*simcross*][https://kbroman.org/simcross/assets/vignettes/simcross.html]. From these two results, we can see the running time in large sample size and compare them with other functions in R, which also calculate kinship relationship. 
+
+# 2 Algorithm
+##  1Exact Kinship Algorithm
+
+In this algorithm, we assume we have n individuals in the pedigree and we have initial kinship matrix between founders.  
+
+* The first step is to construct an matrix to describe the relationship in the pedigree.  
+
+*  Let A be an $n\times n$ matrix initialized with all zeros. V be the set of individuals in the pedigree.  
+**For** all founders $i \in V$ **do**  
+Let $A_{ii}=1$
+**End for**  
+**For** each $i \in V$ with parents $m(i)$, $f(i)$ such that their A row is set **do**  
+**for** each $j \in p(i)$ **do**  
+**for** each $v \in V$ **do**  
+$A_{iv}=A_{m(i)v}$ AND $A_{f(i)v}$  
+**if** $v==i$ **then**  
+$A_{ii}=1
+**end if**
+**end for**  
+**end for**  
+**End for**  
+
+* The second step is to construct an kinship matrix  
+
+*  Let $\Phi$ be an $n \times n$ matrix initialized with 1.  
+**For** every founder $f \in V$ **do**  
+$\Phi_{f,f}=(1+\Psi_{ff})/2$  
+**End for**  
+**For** every pair of founders $f,g \in V$ with $f \ne g$ **do**  
+$\Phi_{f,g}=\Psi_{f,g}$  
+**End for**  
+**For** every founder f and every founder f and every non-founder $j \in V$, j not founder child **do**  
+**if** $A_{jf}==0$ **then**  
+$\Phi_{jf}=0$  
+**end if**  
+**End for**  
+**For** every $i \in V$ whose parents have been assigned kinship **do**  
+**for** every $j \in V$ whose parents have been assigned kinship **do**  
+**if** $i==j$ **then**  
+$\Phi_{ii}=(1+\Phi_{mp})/2$  
+**else**  
+**if** $A_{ji}==0$ **then**  
+$\Phi_{ij}=(\Phi_{mj}+\Phi_{pj})/2$  
+**end if**  
+**end if**  
+**end for**  
+**End for**  
+**for** every $i \in V$ **do**  
+$\Phi_{ii}=(2*\Phi_{ii})-1$  
+**end for**  
+
+##  2 Implement the exact algorithm
+```{r}
+kinshiptest<-function(test){
+  n<-nrow(test)
+  #construct the A matrix
+  A=matrix(0,nrow=n,ncol=n)
+  #set founders
+  for(i in 1:n){
+    if(test[i,'mom']==0 & test[i,'dad']==0){
+      A[i,i]=1
+      a=which(diag(A)!=1)
+    }
+  }
+  #set the paternal-child relationship
+  for(i in a){
+    for(v in 1:n){
+      if(v==i){
+        A[i,i]=1
+      }
+      if(v!=i){
+        if(A[test$mom[i],v]==1 | A[test$dad[i],v]==1){
+          A[i,v]=1
+        }
+      }
+    }
+  }
+  #construct kinship matrix
+  Phi=matrix(1,nrow=n,ncol=n)
+  for(i in 1:n){
+    if(test$mom[i]==0 & test$dad[i]==0){
+      Phi[i,i]=(1+0.5)/2
+    }
+  }
+  #find founders
+  b=which(test$mom==0)
+  c=which(test$dad==0)
+  #initialize kinship between founders
+  for(i in b){
+    for(j in c){
+      if(i !=j){
+        Phi[i,j]=0
+      }
+    }
+  }
+  f=which(test$mom==0 & test$dad==0)
+  fm=f[which(test[f,'sex']==1)]
+  ff=f[which(test[f,'sex']==0)]
+  # test111<-as.matrix(test)
+  #find non-founders
+  cc=test[-f,'id']
+  for(j in cc){
+    if(test[j,'mom']%in%f == FALSE & test[j,'dad']%in%f == FALSE){
+      for(fi in f){
+        Phi[j,fi]=Phi[fi,j]=0
+      }
+    }
+  }
+  ##recursive path
+  for(i in 1:14){
+    for(j in 1:14){
+      if(i==j){
+        if(test$mom[i]==0){
+          Phi[i,i]=(1+Phi[i,i])/2
+        }
+        if(test$mom[i]!=0){
+          Phi[i,i]=(1+Phi[test[i,'mom'],test[i,'dad']])/2
+        }
+      }
+      if(i!=j){
+        if(test$mom[i]==0){
+          Phi[i,j]=Phi[j,i]=(Phi[i,j]+Phi[i,j])/2
+        }
+        if(test$mom[i]!=0){
+          Phi[i,j]=Phi[j,i]=(Phi[test[i,'mom'],j]+Phi[test[i,'dad'],j])/2
+        }
+      }
+    }
+  }
+  return(Phi)
+}
+```
+
+# 3 Check the algorithm
+We have a *kinship* function in package *kinship2*, which can calculate the kinship coefficients in the pedigree. I simulated an small pedigree in size 14 and calculate the kinship in these two functions, which results can be compared with each other to check my program's performance.  
+
+```{r}
+library(kinship2)
+test1<-data.frame(id =c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14),  
+                  mom =c(0, 0, 0, 0, 2, 2, 4, 4, 6, 2, 0, 0, 12, 13),  
+                  dad =c(0, 0, 0, 0, 1, 1, 3, 3, 3, 7, 0, 0, 11, 10),  
+                  sex =c(0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 0, 1, 1, 1))
+tped<-with(test1, pedigree(id, dad, mom, sex))
+Phi_tped<-kinship(tped)
+Phi_tpedtest<-kinshiptest(test1)
+Phi_tped
+Phi_tpedtest
+```
+From these two matrixes, we can see that my program's performance is not much different from the *kinship* function, which means my algorithm can work well. 
+
+# 4 Simulation and running time
+
+I used the dataset AILped from package [QTLRel][https://cran.r-project.org/web/packages/QTLRel/index.html], which is in size 1254. 
+
+```{r}
+library(QTLRel)
+library(dplyr)
+library(simcross)
+data(AILped)
+nrow(AILped)
+AILped1<-arrange(AILped,id)
+l1<-which(AILped1$sex==0)
+l2<-which(AILped1$sex==1)
+AILped1$sex[l1]=1
+AILped1$sex[l2]=0
+ptm <- proc.time()
+Phi_AIL<-kinshiptest(AILped1)
+proc.time() - ptm
+```
+So we can see that the running time in the program is 0.01s when sample size is in 1254.  
+
+```{r}
+library(simcross)
+ailped<-sim_ail_pedigree(ngen=12, npairs=100, nkids_per=5)
+nrow(ailped)
+l11<-which(ailped$sex==0)
+l22<-which(ailped$sex==1)
+ailped$sex[l11]=1
+ailped$sex[l22]=0
+ptm <- proc.time()
+Phi_AIL<-kinshiptest(ailped)
+proc.time() - ptm
+```
+
+```{r}
+library(simcross)
+ailped2<-sim_ail_pedigree(ngen=20, npairs=120, nkids_per=8)
+nrow(ailped2)
+l111<-which(ailped2$sex==0)
+l222<-which(ailped2$sex==1)
+ailped2$sex[l111]=1
+ailped2$sex[l222]=0
+ptm <- proc.time()
+Phi_AIL2<-kinshiptest(ailped2)
+proc.time() - ptm
+```
+And then I use the funcion [sim_ail_pedigree][https://kbroman.org/simcross/assets/vignettes/simcross.html] in package *simcross* to simulate two different pedigrees in sample size 2504 and 5284. And we can see even though the running time is longer with larger sample size, it is still smaller than 0.2s. 
+
+
+
+
+
+
+
+
+
+
